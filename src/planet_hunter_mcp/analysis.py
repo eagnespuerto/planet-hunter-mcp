@@ -397,7 +397,16 @@ def stack_primary(segments: list[Segment], T0: float, P: float, inner_h: float |
         np.concatenate([a[0] for a in arr.values()]), np.concatenate([a[1] for a in arr.values()]))
     if len(fx) < 50:
         raise ValueError("Too few in-eclipse points to stack; check the ephemeris and cached sectors.")
-    p, cov = curve_fit(_trap_hours, fx, ff, p0=[0.1, 6, 1, 0], maxfev=40000)
+    # Starting guess from the stack itself (0.1-h binned medians): depth from the minimum, T14 from
+    # the half-depth width scaled up, so planets (~1 %, ~2 h) and EBs (~10 %, ~7 h) both converge.
+    edges = np.arange(fx.min(), fx.max() + 0.1, 0.1)
+    idx = np.digitize(fx, edges)
+    bx = np.array([fx[idx == k].mean() for k in np.unique(idx)])
+    bf = np.array([np.median(ff[idx == k]) for k in np.unique(idx)])
+    d0 = max(1 - bf.min(), 1e-4)
+    half = np.abs(bx[bf < 1 - d0 / 2])
+    T14_0 = 2.6 * half.max() if len(half) else 4.0
+    p, cov = curve_fit(_trap_hours, fx, ff, p0=[d0, T14_0, T14_0 / 3, 0], maxfev=40000)
     err = np.sqrt(np.abs(np.diag(cov)))
     return dict(depth=p[0], e_depth=err[0], T14_h=abs(p[1]), e_T14_h=err[1], T23_h=max(p[2], 0),
                 e_T23_h=err[2], x0_h=p[3], eclipses_used=used, fit_group=fit_group,

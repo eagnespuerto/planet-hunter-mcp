@@ -33,13 +33,19 @@ def search(tic: int) -> list[dict]:
     return rows
 
 
+def _rank(author: str, exptime: float) -> tuple:
+    """SPOC 2-min > TESS-SPOC FFI > QLP. Within a pipeline 120 s beats 20 s (the 20-s products are
+    ~6× larger and add nothing for eclipse timing), then the shortest cadence wins."""
+    return (AUTHOR_PREF[author], 0 if abs(exptime - 120) < 1 else 1, exptime)
+
+
 def choose_best(rows: list[dict], authors: list[str]) -> dict[int, dict]:
-    """Per sector prefer SPOC 2-min > TESS-SPOC FFI > QLP (then the shortest cadence)."""
+    """Pick one product per sector using _rank."""
     best: dict[int, dict] = {}
     for r in rows:
         if r["author"] not in authors or r["author"] not in AUTHOR_PREF:
             continue
-        key = (AUTHOR_PREF[r["author"]], r["exptime_s"])
+        key = _rank(r["author"], r["exptime_s"])
         if r["sector"] not in best or key < best[r["sector"]]["_key"]:
             best[r["sector"]] = {**r, "_key": key}
     return {s: {k: v for k, v in r.items() if k != "_key"} for s, r in sorted(best.items())}
@@ -100,16 +106,21 @@ def load_segments(tic: int, exclude_sectors: list[int] | None = None,
                   authors: list[str] | None = None) -> list[Segment]:
     """Load cached light curves (run ph_mast_download_lightcurves first)."""
     d = target_dir(tic) / "lc"
-    segs = []
+    chosen: dict[int, tuple] = {}
     for p in sorted(d.glob("S*_*.npz")) if d.exists() else []:
         sec_s, author, exp_s = p.stem.split("_", 2)
-        sec = int(sec_s[1:])
-        if exclude_sectors and sec in exclude_sectors:
+        sec, exp = int(sec_s[1:]), float(exp_s[:-1])
+        if (exclude_sectors and sec in exclude_sectors) or (authors and author not in authors):
             continue
-        if authors and author not in authors:
+        if author not in AUTHOR_PREF:
             continue
+        # Several products may be cached for one sector; use exactly one so no data is double counted.
+        if sec not in chosen or _rank(author, exp) < _rank(chosen[sec][1], chosen[sec][2]):
+            chosen[sec] = (p, author, exp)
+    segs = []
+    for sec, (p, author, exp) in sorted(chosen.items()):
         z = np.load(p)
-        segs.append(Segment(sector=sec, author=author, t=z["t"], f=z["f"], exptime=float(exp_s[:-1])))
+        segs.append(Segment(sector=sec, author=author, t=z["t"], f=z["f"], exptime=exp))
     if not segs:
         raise FileNotFoundError(f"No cached light curves for TIC {tic}; call ph_mast_download_lightcurves first.")
     return segs

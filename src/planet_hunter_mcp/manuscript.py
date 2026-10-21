@@ -46,6 +46,7 @@ def scaffold_rnaas(out_dir: Path, job: str, *, title: str, author: str, orcid: s
     kw = " --- ".join(rf"\uat{{{n}}}{{{i}}}" for n, i in keywords) or r"\uat{TODO}{0}"
     vet = f"Vetstar{(' ' + vetstar_version) if vetstar_version else ''} (\\url{{https://github.com/eagnespuerto/vetstar}})"
     author_cmd = rf"\author[{orcid}]{{{author}}}" if orcid else rf"\author{{{author}}}"
+    fig_width = r"\textwidth" if twocolumn else r"\columnwidth"  # no backslashes inside f-string braces before 3.12
     body = rf"""%% {star_label} -- Research Note (RNAAS) / preprint, scaffolded by planet-hunter-mcp
 %% Build: pdfLaTeX -> BibTeX -> pdfLaTeX -> pdfLaTeX   (or ph_latex_build)
 %% RNAAS limits: abstract <= 150 words, body <= 1000 words, 1 figure or table, <= 15 references.
@@ -83,7 +84,7 @@ def scaffold_rnaas(out_dir: Path, job: str, *, title: str, author: str, orcid: s
 %% Defined at the start of Section 2 so the two-column figure* floats to the top of the next page.
 \begin{{figure{"*" if twocolumn else ""}}}[t]
 \centering
-\includegraphics[width={"\\textwidth" if twocolumn else "\\columnwidth"}]{{{fig}}}
+\includegraphics[width={fig_width}]{{{fig}}}
 \caption{{%% TODO (a) stacked, locally normalized primary eclipse with model; (b) secondary search with $\pm3\sigma$ band.
 }}
 \label{{fig:lc}}
