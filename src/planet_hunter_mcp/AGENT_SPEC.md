@@ -106,6 +106,10 @@ Each stage: **Do → Decide → Gate** (gate = condition that must hold before t
 - **Gate:** O−C rms ≪ eclipse duration; all shorter aliases excluded with counts.
 
 ### S7. Secondary eclipse + interpretation
+- **Primary model:** the trapezoid is right for eclipsing binaries but underfits the curved bottom
+  of a limb-darkened planet transit (WASP-98 b: depth 2.55 % vs 2.63 %). For planet-sized
+  companions use `model="batman"`: quadratic limb darkening, u₁/u₂ priors from Claret (2017) TESS
+  (ATLAS) at the TIC Teff/logg; fits Rp/R★, b, a/R★ and the mid-time offset on the stack.
 - **Do:** per-visit local baseline: depth = median(baseline 2.5–6 h either side) − median(±1.5 h
   window), per orbit, weighted mean per trial phase (grid 0.001). Errors from baseline scatter;
   inflate by robust SNR scatter (1.4826·MAD of SNR across phases; seen 1.48) for red noise.
@@ -118,7 +122,7 @@ Each stage: **Do → Decide → Gate** (gate = condition that must hold before t
 - **Gate:** every number traceable to a script output (`paper_numbers.json`).
 
 ### S8. Figure
-- One figure (RNAAS limit): (a) locally normalized stacked primary + model; (b) secondary
+- One figure (RNAAS limit): (a) locally normalized stacked primary + the fitted model; (b) secondary
   search ±3σ band + expected-depth reference line (put off-scale values in a label).
 - **File name must differ from the LaTeX job name** (`fig1.pdf` vs `note.pdf`) — otherwise pdfTeX
   embeds the file it is writing → "xpdf: reading PDF image failed".

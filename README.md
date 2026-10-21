@@ -18,7 +18,7 @@ submit, publish or push tools; you click those buttons yourself.
 | S2 Identity and contamination | `ph_resolve_target`, `ph_contamination`, `ph_simbad_region` | TIC v8.2 record. For each Gaia DR3 neighbour, the dip it would need, δ_nb = δ(1+f)/f, combined with the centroid σ. |
 | S3 Novelty and literature | `ph_vizier_sweep`, `ph_vizier_query`, `ph_simbad_references`, `ph_exofop`, `ph_exoplanet_archive_cone`, `ph_exoplanet_archive_query`, `ph_ads_search` | Sweeps every VizieR catalogue and flags variability and period tables (this is how IJspeert+2024 turned up when SIMBAD missed it). Also ExoFOP TOIs and CTOIs, known planets and TOIs, and ADS through its API. |
 | S4 Data | `ph_mast_list_lightcurves`, `ph_mast_download_lightcurves` | One light curve per sector, preferring SPOC 2-min, then TESS-SPOC FFI, then QLP. Cached locally, with warnings for artefact runs. |
-| S5–S7 Analysis | `ph_find_eclipses`, `ph_fit_ephemeris`, `ph_primary_stack`, `ph_secondary_search` | Trapezoid mid-times flagged for full coverage. Weighted ephemeris with O−C. P/2, P/3 and 2P alias tests. Stacked primary and orbit geometry (k_min, a/R₁, b, e·sinω). Per-visit local-baseline secondary search with red-noise inflation and a lone-spike test. |
+| S5–S7 Analysis | `ph_find_eclipses`, `ph_fit_ephemeris`, `ph_primary_stack`, `ph_secondary_search` | Trapezoid mid-times flagged for full coverage. Weighted ephemeris with O−C. P/2, P/3 and 2P alias tests. Stacked primary (trapezoid, or with `model="batman"` a quadratic limb-darkened Mandel–Agol transit with Claret 2017 TESS limb-darkening priors: Rp/R★, b, a/R★, depth, T₁₄, T₂₃ with errors) and orbit geometry (k_min, a/R₁, b, e·sinω). Per-visit local-baseline secondary search with red-noise inflation and a lone-spike test. |
 | S8 Figure | `ph_make_figure` | The single RNAAS figure: (a) stacked primary with model, (b) secondary search with a ±3σ band. |
 | S9–S11 Manuscript | `ph_rnaas_scaffold`, `ph_rnaas_check`, `ph_latex_build`, `ph_rnaas_submission_folder` | AASTeX 7.0.1 skeleton with the AI disclosure, Vetstar credit and a `\dataset` entry for each MAST product. Checks RNAAS limits, compiles and renders pages, and builds a flat single-column submission folder that is tested standalone. |
 | S10 References | `ph_verify_references`, `ph_uat_search` | Checks every DOI in a `.bib`/`.tex` against Crossref or DataCite (title, volume, page) and verifies UAT keyword IDs. |
@@ -51,8 +51,12 @@ QLP excluded, as in the paper):
 | P | 2.9626414(3) d, against the archive's 2.96264036 d; O−C rms 0.95 min |
 | TOI-404.01 epoch | Predicted to −0.5 min (0.9σ) at E = 255 |
 | Contamination | On target. A G = 8.5 star 6.6 px away is ruled out by the on-target centroid. |
+| Trapezoid fit | Depth 2.55 %, T₁₄ 1.84 h (underfits the limb-darkened bottom) |
+| Limb-darkened fit (`model="batman"`) | Rp/R★ = 0.1587 ± 0.0011 (archive 0.15824 ± 0.00081, +0.3σ); b = 0.685 ± 0.018 (archive 0.71 ± 0.01, −1.2σ); depth 2.63 %, T₁₄ 1.92 h (archive 1.908 h) |
 
-Unit tests (`pytest -m "not network"`) use synthetic eclipsing-binary light curves.
+Archive values are fetched live with `ph_exoplanet_archive_query` (`pscomppars`) when the script runs.
+
+Unit tests (`pytest -m "not network"`) use synthetic eclipsing-binary light curves and synthetic limb-darkened transits.
 
 ## Install
 

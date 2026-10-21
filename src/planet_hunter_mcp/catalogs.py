@@ -55,8 +55,32 @@ def tic_lookup(tic: int) -> dict:
         raise ValueError(f"TIC {tic} not found at MAST.")
     r = _table_rows(tab, 1)[0]
     keep = ["ID", "ra", "dec", "Tmag", "Vmag", "GAIAmag", "Teff", "e_Teff", "logg", "rad", "e_rad",
-            "mass", "e_mass", "d", "e_d", "plx", "GAIA", "HIP", "TYC", "contratio", "lumclass", "objType"]
+            "mass", "e_mass", "d", "e_d", "plx", "GAIA", "HIP", "TYC", "contratio", "lumclass", "objType", "MH"]
     return {k: r.get(k) for k in keep if k in r}
+
+
+CLARET2017_TESS_QUAD = "J/A+A/600/A30/table25"  # ATLAS, quadratic, TESS band (Claret 2017, A&A 600, A30)
+
+
+def claret2017_tess_ld(teff: float, logg: float, mh: float | None = None, xi: float = 2.0) -> dict:
+    """Quadratic TESS limb darkening from Claret (2017) ATLAS models (LSM fits, microturbulence `xi` km/s),
+    at the grid metallicity nearest [M/H] (0 if unknown), bilinearly interpolated in Teff and logg."""
+    from astroquery.vizier import Vizier
+
+    from .analysis import claret_interp
+    v = Vizier(columns=["logg", "Teff", "Z", "xi", "aLSM", "bLSM"], row_limit=-1,
+               column_filters={"Teff": f"{teff - 300:.0f}..{teff + 300:.0f}",
+                               "logg": f"{logg - 0.6:.2f}..{logg + 0.6:.2f}", "xi": f"={xi:g}"})
+    res = v.query_constraints(catalog=CLARET2017_TESS_QUAD)
+    if not res or len(res[0]) == 0:
+        raise ValueError(f"No Claret (2017) TESS rows near Teff={teff}, logg={logg}.")
+    rows = _table_rows(res[0], 10000)
+    zs = sorted({r["Z"] for r in rows})
+    z = min(zs, key=lambda q: abs(q - (mh if mh is not None else 0.0)))
+    rows = [dict(Teff=r["Teff"], logg=r["logg"], a=r["aLSM"], b=r["bLSM"]) for r in rows if r["Z"] == z]
+    out = claret_interp(rows, teff, logg)
+    return dict(out, Z=z, xi=xi, Teff=teff, logg=logg, MH=mh, catalog=CLARET2017_TESS_QUAD,
+                source="Claret (2017) TESS quadratic, ATLAS LSM")
 
 
 def resolve_name(name: str) -> dict:

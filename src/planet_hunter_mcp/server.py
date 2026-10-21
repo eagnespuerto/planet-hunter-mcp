@@ -406,16 +406,40 @@ async def ph_fit_ephemeris(
         return f"Error: {type(e).__name__}: {e}"
 
 
+async def _limb_darkening(t: str, tic_row: dict, u1: float | None, u2: float | None, sigma: float) -> dict:
+    """LD prior for the batman fit: explicit u1/u2, else Claret (2017) TESS at the TIC Teff/logg/[M/H]."""
+    if u1 is not None and u2 is not None:
+        return dict(u1=u1, u2=u2, sigma=sigma, source="user")
+    teff, logg = tic_row.get("Teff"), tic_row.get("logg")
+    if not (teff and logg):
+        return dict(analysis.LD_DEFAULT_PRIOR, note="TIC Teff/logg unknown; run ph_resolve_target for Claret LD")
+    try:
+        cl = await _thread(catalogs.claret2017_tess_ld, float(teff), float(logg), tic_row.get("MH"))
+    except Exception as e:  # noqa: BLE001
+        return dict(analysis.LD_DEFAULT_PRIOR, note=f"Claret (2017) lookup failed ({type(e).__name__}: {e})")
+    record_numbers(t, "limb_darkening", cl)
+    return dict(u1=u1 if u1 is not None else cl["u1"], u2=u2 if u2 is not None else cl["u2"], sigma=sigma,
+                source=cl["source"], Teff=cl["Teff"], logg=cl["logg"], Z=cl["Z"])
+
+
 @mcp.tool(name="ph_primary_stack", annotations=WRITE_LOCAL)
 async def ph_primary_stack(
     tic: TIC, exclude_sectors: Sectors = None,
     m1_msun: Annotated[float | None, Field(gt=0, description="Primary mass (default TIC 'mass')")] = None,
     m2_msun: Annotated[float, Field(gt=0, description="Assumed companion mass for a/R1")] = 0.9,
     r1_rsun: Annotated[float | None, Field(gt=0, description="Primary radius (default TIC 'rad')")] = None,
+    model: Annotated[Literal["trapezoid", "batman"], Field(
+        description="'trapezoid' (default; eclipsing binaries) or 'batman': quadratic limb-darkened "
+                    "Mandel–Agol transit for planet-sized companions")] = "trapezoid",
+    u1: Annotated[float | None, Field(description="batman: quadratic LD u1 prior centre (default Claret 2017 TESS)")] = None,
+    u2: Annotated[float | None, Field(description="batman: quadratic LD u2 prior centre (default Claret 2017 TESS)")] = None,
+    ld_prior_sigma: Annotated[float, Field(ge=0, le=1, description="batman: Gaussian prior width on u1, u2 (0 fixes them)")] = 0.1,
 ) -> str:
     """S7 (primary): stack locally normalised primaries on the ephemeris, fit a trapezoid (depth, T14, T23),
     then the orbit geometry: k_min = sqrt(depth), R2_min, a/R1, circular central duration, implied b, and the
-    e·sinω needed to hide a secondary. Requires ph_fit_ephemeris and ph_resolve_target (or explicit R1/M1)."""
+    e·sinω needed to hide a secondary. Requires ph_fit_ephemeris and ph_resolve_target (or explicit R1/M1).
+    model='batman' fits a limb-darkened transit instead (Rp/R★, b, a/R★, mid-time, u1, u2 with priors from
+    Claret 2017 via the TIC Teff/logg) and reports depth, T14, T23, b, Rp/R★ with uncertainties."""
     t = normalize_tic(tic)
     try:
         nums = load_numbers(t)
@@ -428,11 +452,15 @@ async def ph_primary_stack(
         if not (r1 and m1):
             return "Error: R1/M1 unknown; run ph_resolve_target or pass r1_rsun and m1_msun."
         segs = lightcurves.load_segments(t, exclude_sectors)
-        st = await _thread(analysis.stack_primary, segs, eph["T0_btjd"], eph["P"])
+        if model == "batman":
+            ld = await _limb_darkening(t, tic_row, u1, u2, ld_prior_sigma)
+            st = await _thread(analysis.stack_primary, segs, eph["T0_btjd"], eph["P"], model="batman", ld=ld)
+        else:
+            st = await _thread(analysis.stack_primary, segs, eph["T0_btjd"], eph["P"])
         geo = analysis.orbit_geometry(st["depth"], st["T14_h"], eph["P"], r1, m1, m2_msun)
         np.savez_compressed(target_dir(t) / "primary_stack.npz",
                             **{f"{g}_{k}": v for g, d in st["_stack"].items() for k, v in d.items()},
-                            params=np.array(st["_params"]))
+                            params=np.array(st["_params"]), **({"model": np.array(model)} if model != "trapezoid" else {}))
         out = dict(primary=_public(st), geometry=geo, assumptions=dict(R1_rsun=r1, M1_msun=m1, M2_msun=m2_msun))
         record_numbers(t, "primary", _public(st) | {"n_eclipses_stacked": len(st["eclipses_used"])})
         record_numbers(t, "geometry", geo | out["assumptions"])
@@ -486,7 +514,7 @@ async def ph_make_figure(
     job: Annotated[str | None, Field(description="LaTeX job name; the figure is <job>_fig1.pdf so it never equals the job name")] = None,
     reference_teff2: Annotated[int | None, Field(description="Companion Teff for the expected-secondary line")] = None,
 ) -> str:
-    """S8: the single RNAAS figure — (a) stacked primary with trapezoid model, (b) secondary search with ±3σ band
+    """S8: the single RNAAS figure — (a) stacked primary with the fitted model (trapezoid or limb-darkened), (b) secondary search with ±3σ band
     and the expected circular-orbit depth (off-scale values go in a label). Writes PDF and PNG."""
     t = normalize_tic(tic)
     try:
@@ -502,8 +530,9 @@ async def ph_make_figure(
         r2 = (nums.get("geometry") or {}).get("R2_min_rsun")
         if r2 is not None and r2 * analysis.RSUN_RJUP <= 2.0 and reference_teff2 is None:
             exp = {}  # planet-sized companion: a stellar-companion secondary line would mislead
+        model = str(z["model"]) if "model" in z.files else "trapezoid"
         files = await _thread(rnaas_figure, d / f"{jb}_fig1", stack, list(z["params"]), nums["ephemeris"]["P"],
-                              sec, exp or None, reference_teff2)
+                              sec, exp or None, reference_teff2, model)
         return dumps(dict(files=files, next_step="Inspect the PNG before using it in the manuscript."))
     except FileNotFoundError as e:
         return f"Error: {e}. Run ph_primary_stack (and ph_secondary_search) first."
