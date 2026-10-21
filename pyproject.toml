@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "planet-hunter-mcp"
+version = "0.1.0"
+description = "MCP server for TESS planet hunters: Vetstar vetting, MAST light curves, exoplanet/stellar catalogues, ephemerides, and submission-ready RNAAS + Zenodo bundles."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ella Agnes Puerto" }]
+requires-python = ">=3.10"
+keywords = ["mcp", "model-context-protocol", "astronomy", "exoplanets", "tess", "mast", "eclipsing-binaries", "research"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+  "mcp>=2.3,<3",
+  "httpx>=0.27",
+  "pydantic>=2.7",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "astropy>=6.0",
+  "astroquery>=0.4.7",
+  "lightkurve>=2.4",
+  "matplotlib>=3.8",
+  "pymupdf>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+planet-hunter-mcp = "planet_hunter_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/eagnespuerto/planet-hunter-mcp"
+Vetstar = "https://github.com/eagnespuerto/vetstar"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/planet_hunter_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["network: hits live astronomy services (deselect with -m 'not network')"]
