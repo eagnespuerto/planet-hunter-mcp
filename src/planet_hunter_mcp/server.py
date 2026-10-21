@@ -204,15 +204,22 @@ async def ph_contamination(
         target = next((n for n in nbs if n["sep_arcsec"] < 2 and (g_t is None or abs(n["mag"] - g_t) < 0.5)), None)
         g_ref = target["mag"] if target else g_t
         others = [n for n in nbs if n is not target]
-        res = analysis.contamination(depth, g_ref, others)
+        csig, csrc = centroid_sigma, "argument"
+        if csig is None:  # fall back to the larger Vetstar centroid offset recorded in the ledger
+            led = load_numbers(t)
+            v = led.get("vetstar") or led.get("vetstar_report") or {}
+            sig = [abs(v[k]) for k in ("centroid_col_sigma", "centroid_row_sigma") if isinstance(v.get(k), (int, float))]
+            csig, csrc = (max(sig), "vetstar") if sig else (None, None)
+        res = analysis.contamination(depth, g_ref, others, centroid_sigma=csig)
         res["target_gaia"] = target
-        res["centroid_sigma"] = centroid_sigma
-        if centroid_sigma is not None:
-            res["centroid_on_target"] = abs(centroid_sigma) < 3
+        res["centroid_source"] = csrc
+        if csig is not None:
+            res["centroid_on_target"] = abs(csig) < 3
         res["neighbours"] = res["neighbours"][:25]
-        res["statement"] = (
-            f"{res['verdict']}; brightest viable neighbour would need a "
-            f"{res['neighbours'][0]['required_neighbour_dip']:.2f} intrinsic dip" if res["neighbours"] else res["verdict"])
+        nb_min = next((n for n in res["neighbours"] if n["status"] != "excluded_by_centroid"), None)
+        res["statement"] = res["verdict"] + (
+            f"; the most capable remaining neighbour ({nb_min['name']}, {nb_min['sep_arcsec']:.0f}″) would need a "
+            f"{nb_min['required_neighbour_dip']:.2f} intrinsic dip" if nb_min else "")
         record_numbers(t, "contamination", {k: v for k, v in res.items() if k != "neighbours"} |
                        {"closest_neighbours": res["neighbours"][:5]})
         return dumps(res)
@@ -388,6 +395,7 @@ async def ph_fit_ephemeris(
         tt, ff = lightcurves.concat(segs)
         al = await _thread(analysis.alias_tests, tt, ff, eph["T0_btjd"], eph["P"], dip_threshold, 10, ev)
         eph["aliases"] = al
+        eph["gate"]["period_consistent_with_data"] = al["P_consistent"]
         record_numbers(t, "ephemeris", eph)
         rows = [dict(epoch=e, sector=s, author=a, t_mid_btjd=x, t_mid_bjd_tdb=x + BTJD_OFFSET, oc_min=o, depth=d)
                 for e, s, a, x, o, d in zip(eph["epochs"], eph["sectors"], eph["authors"], eph["times"],
@@ -453,7 +461,8 @@ async def ph_secondary_search(
             return "Error: run ph_fit_ephemeris first."
         segs = lightcurves.load_segments(t, exclude_sectors)
         tt, ff = lightcurves.concat(segs)
-        sec = await _thread(analysis.secondary_search, tt, ff, eph["T0_btjd"], eph["P"], phase_step)
+        sec = await _thread(analysis.secondary_search, tt, ff, eph["T0_btjd"], eph["P"], phase_step,
+                            primary_T14_h=(prim or {}).get("T14_h"))
         np.savez_compressed(target_dir(t) / "secondary_curve.npz", **sec["_curve"])
         out = _public(sec)
         T1 = teff1 or (nums.get("tic") or {}).get("Teff")
@@ -490,6 +499,9 @@ async def ph_make_figure(
         sec = dict(np.load(scp)) if scp.exists() else None
         nums = load_numbers(t)
         exp = {int(k): v for k, v in (nums.get("secondary", {}).get("expected_circular_secondary") or {}).items()}
+        r2 = (nums.get("geometry") or {}).get("R2_min_rsun")
+        if r2 is not None and r2 * analysis.RSUN_RJUP <= 2.0 and reference_teff2 is None:
+            exp = {}  # planet-sized companion: a stellar-companion secondary line would mislead
         files = await _thread(rnaas_figure, d / f"{jb}_fig1", stack, list(z["params"]), nums["ephemeris"]["P"],
                               sec, exp or None, reference_teff2)
         return dumps(dict(files=files, next_step="Inspect the PNG before using it in the manuscript."))
@@ -702,7 +714,8 @@ async def ph_acceptance_checklist(
         "prior_literature_table": ("agent must confirm",
                                    "ph_vizier_sweep + ph_simbad_references + ph_exofop + ph_ads_search, written up"),
         "ephemeris_aliases_2P": (
-            ("pass" if eph.get("gate", {}).get("ge3_events") and al.get("all_shorter_aliases_excluded") and al.get("2P")
+            ("pass" if eph.get("gate", {}).get("ge3_events") and al.get("P_consistent")
+             and al.get("all_shorter_aliases_excluded") and al.get("2P")
              else "fail") if eph else "not run",
             {"P": eph.get("P"), "e_P": eph.get("e_P"), "gate": eph.get("gate"),
              "P/2": al.get("P/2"), "P/3": al.get("P/3"), "2P": al.get("2P")} if eph else None),

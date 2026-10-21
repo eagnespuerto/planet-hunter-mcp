@@ -108,23 +108,40 @@ def expected_secondary(depth: float, teff1: float, teff2_list=(3000, 3500, 4000,
 
 # ------------------------------------------------------------------ S2 contamination
 
-def contamination(depth: float, target_mag: float, neighbours: list[dict]) -> dict:
+TESS_PIXEL_ARCSEC = 21.0
+
+
+def contamination(depth: float, target_mag: float, neighbours: list[dict],
+                  centroid_sigma: float | None = None, min_sep_pixels: float = 2.0) -> dict:
     """For each neighbour {name, mag, sep_arcsec}: flux ratio f and required intrinsic dip δ_nb.
 
     δ_nb = δ·(1+f)/f. δ_nb > 1 → impossible; > 0.5 → implausible without a centroid shift.
+    The flux test alone cannot clear a bright star a few pixels away (it needs only a small dip), so,
+    per spec S2, a neighbour ≥ `min_sep_pixels` TESS pixels away is excluded when the centroid offset
+    is < 3σ: a dip on that star would have pulled the centroid toward it.
     """
+    on_target_centroid = centroid_sigma is not None and abs(centroid_sigma) < 3
     rows = []
     for nb in neighbours:
         f = 10 ** (-0.4 * (nb["mag"] - target_mag))
         d_nb = depth * (1 + f) / f
+        sep_px = nb.get("sep_arcsec", 0) / TESS_PIXEL_ARCSEC
         status = "impossible" if d_nb > 1 else ("implausible" if d_nb > 0.5 else "possible")
-        rows.append({**nb, "flux_ratio": f, "required_neighbour_dip": d_nb, "status": status})
+        if status != "impossible" and on_target_centroid and sep_px >= min_sep_pixels:
+            status = "excluded_by_centroid"
+        rows.append({**nb, "sep_pixels": sep_px, "flux_ratio": f, "required_neighbour_dip": d_nb,
+                     "status": status})
     rows.sort(key=lambda r: r["required_neighbour_dip"])
     viable = [r for r in rows if r["status"] == "possible"]
-    return dict(depth=depth, target_mag=target_mag, neighbours=rows,
-                verdict=("contaminant possible: check centroids/difference images" if viable
-                         else "on target (no neighbour can produce the dip)"),
-                n_possible=len(viable))
+    if viable:
+        verdict = ("contaminant possible: " + ", ".join(f"{r['name']} ({r['sep_pixels']:.1f} px)" for r in viable[:3])
+                   + (" — supply the centroid σ" if centroid_sigma is None
+                      else " — within the centroid resolution; check difference images"))
+    else:
+        verdict = "on target (no neighbour can produce the dip" + (
+            " given the on-target centroid)" if on_target_centroid else ")")
+    return dict(depth=depth, target_mag=target_mag, neighbours=rows, verdict=verdict,
+                n_possible=len(viable), centroid_sigma=centroid_sigma)
 
 
 # ----------------------------------------------------------------- S5 eclipse finding
@@ -178,19 +195,38 @@ def find_eclipses(segments: list[Segment], dip_thresh: float = 0.03, max_depth: 
 
 # ---------------------------------------------------------------- S6 ephemeris/aliases
 
+def _bootstrap_period(t: np.ndarray, P0: float, tol_days: float) -> float | None:
+    """Phase-connect eclipse times in time order, refitting T0 and P after each one.
+
+    Refitting is what keeps a long baseline from drifting: a 0.001 d error in P0 grows to ~1 d after
+    1000 cycles, so checking all separations against an unrefined P0 picks spurious sub-harmonics.
+    Growth starts at the closest pair and adds events nearest-first, so each hop is short."""
+    i0 = int(np.argmin(np.diff(t)))
+    order = np.argsort(np.abs(t - t[i0]), kind="stable")
+    t = t[order]
+    T0, P = t[0], P0
+    for k in range(1, len(t)):
+        E = np.round((t[: k + 1] - T0) / P)
+        if np.abs(t[k] - (T0 + P * E[-1])) > tol_days:
+            return None
+        if len(np.unique(E)) >= 2:
+            P, T0 = np.polyfit(E, t[: k + 1], 1)
+    res = t - (T0 + P * np.round((t - T0) / P))
+    return float(P) if np.all(np.abs(res) < tol_days) else None
+
+
 def trial_period(t0s: list[float], tol_days: float = 0.05, max_n: int = 200) -> float:
-    """Largest P such that every separation from the first epoch is ~an integer multiple of P."""
-    t0s = np.sort(np.asarray(t0s))
-    seps = t0s[1:] - t0s[0]
-    seps = seps[seps > tol_days]
-    if not len(seps):
+    """Largest P (closest-pair separation / n) whose bootstrapped ephemeris phase-connects every eclipse."""
+    t = np.unique(np.round(np.sort(np.asarray(t0s, float)), 5))
+    if len(t) < 2:
         raise ValueError("Need at least two distinct eclipse times to estimate a period.")
-    dmin = np.min(np.diff(np.unique(np.round(t0s, 3)))) if len(t0s) > 2 else seps[0]
+    dmin = float(np.min(np.diff(t)))
     for n in range(1, max_n + 1):
-        P = dmin / n
-        if np.all(np.abs(seps / P - np.round(seps / P)) * P < tol_days):
-            return float(P)
-    return float(dmin / max_n)
+        P = _bootstrap_period(t, dmin / n, tol_days)
+        if P is not None:
+            return P
+    raise ValueError(f"No period ≤ {dmin:.4f} d phase-connects all eclipses within {tol_days} d; "
+                     "pass trial_period explicitly or exclude events with poor timing.")
 
 
 def fit_ephemeris(events: list[dict], trial_p: float | None = None, sigma_floor_d: float = 2e-4) -> dict:
@@ -261,6 +297,13 @@ def alias_tests(t, f, T0: float, P: float, dip_thresh: float = 0.03, bin_minutes
                 twoP[a] = dict(note="only one parity observed in this pipeline; 2P untestable here", **{k: len(v) for k, v in g.items()})
         out["2P"] = twoP
     out["all_shorter_aliases_excluded"] = bool(out["P/2"]["excluded"] and out["P/3"]["excluded"])
+    # The adopted period must itself predict dips wherever data exist (allow ~10 % edge/noise misses);
+    # otherwise it is a sub-harmonic and the alias exclusions above are meaningless.
+    pc = out["P"]
+    out["P_consistent"] = bool(pc["covered"] > 0 and pc["covered_without_dip"] <= max(1, 0.1 * pc["covered"]))
+    if not out["P_consistent"]:
+        out["warning"] = (f"Adopted P predicts {pc['covered_without_dip']} of {pc['covered']} covered epochs "
+                          "with no dip: wrong period (likely a sub-harmonic). Re-run with trial_period.")
     return out
 
 
@@ -268,17 +311,28 @@ def alias_tests(t, f, T0: float, P: float, dip_thresh: float = 0.03, bin_minutes
 
 def secondary_search(t, f, T0: float, P: float, step: float = 0.001, half_window_h: float = 1.5,
                      base_lo_h: float = 2.5, base_hi_h: float = 6.0,
-                     phase_range=(0.03, 0.97)) -> dict:
+                     phase_range=(0.03, 0.97), primary_T14_h: float | None = None) -> dict:
     """Per-visit local-baseline depth vs phase, weighted mean per trial phase, red-noise inflated.
 
     Never uses a global median baseline (sector offsets mimic multi-sigma secondaries).
+    In-primary points are masked (given primary_T14_h) and trial phases whose in-window would touch
+    the primary are skipped, so short periods don't leak the primary into baselines.
     """
     t = np.asarray(t, float)
     f = np.asarray(f, float)
     o = np.argsort(t)
     t, f = t[o], f[o]
     ph = ((t - T0) / P) % 1
-    grid = np.arange(phase_range[0], phase_range[1], step)
+    lo, hi = phase_range
+    if primary_T14_h:
+        half_pri = (0.6 * primary_T14_h) / 24 / P          # T14/2 plus a 20 % margin
+        keep = np.minimum(ph, 1 - ph) > half_pri
+        t, f, ph = t[keep], f[keep], ph[keep]
+        edge = half_pri + half_window_h / 24 / P
+        lo, hi = max(lo, edge), min(hi, 1 - edge)
+    if hi <= lo:
+        raise ValueError("The search windows are wider than the orbit allows; reduce half_window_h/base_hi_h.")
+    grid = np.arange(lo, hi, step)
     w_in, b_lo, b_hi = half_window_h / 24 / P, base_lo_h / 24 / P, base_hi_h / 24 / P
     sd = np.full(len(grid), np.nan)
     se = np.full(len(grid), np.nan)
@@ -325,13 +379,16 @@ def secondary_search(t, f, T0: float, P: float, step: float = 0.001, half_window
         while b < len(above) - 1 and above[b + 1]:
             b += 1
         width = b - a + 1
-    expect_width = int(round(2 * half_window_h / 24 / P / step))
-    lone = bool(above[jm] and (nv[jm] <= 1 or width < max(2, expect_width // 3)))
+    # A real secondary lasts about as long as the primary, so it stays above 3σ over ~T14 of phase;
+    # an excursion narrower than half of that (or fed by a single visit) is a noise spike.
+    dur_h = primary_T14_h or 2 * half_window_h
+    expect_width = dur_h / 24 / P / step
+    lone = bool(above[jm] and (nv[jm] <= 1 or width < max(2.0, 0.5 * expect_width)))
     return dict(phase_grid_step=step, inflation_factor=infl, median_1sigma=float(np.nanmedian(se_i)),
                 limit_3sigma=lim3, depth_at_0p5=float(sd[j5]), err_at_0p5=float(se_i[j5]),
                 visits_at_0p5=int(nv[j5]), max_phase=float(grid[jm]), max_depth=float(sd[jm]),
                 max_err=float(se_i[jm]), max_snr=float(sd[jm] / se_i[jm]), max_visits=int(nv[jm]),
-                max_excursion_width_points=width, lone_spike=lone,
+                max_excursion_width_points=width, expected_width_points=round(expect_width, 1), lone_spike=lone,
                 n_points_above_5sigma=int(np.sum((sd / se_i) > 5)),
                 phases_without_visits_frac=float(np.mean(nv == 0)),
                 _curve=dict(grid=grid, depth=sd, err=se_i, visits=nv))

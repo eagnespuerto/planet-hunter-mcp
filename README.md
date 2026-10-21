@@ -42,6 +42,16 @@ QLP excluded, as in the paper):
 | 3σ limit, inflation | 240 ppm, 1.48 | 243 ppm, 1.48 |
 | Brightest neighbour (G = 11.7 at 118″) | δ_nb ≈ 0.77 | δ_nb = 0.78 |
 
+`scripts/regression_wasp98.py` is the known-planet control: WASP-98 b (TIC 166833457, TOI-404.01), with
+34 transits in SPOC 2-min data over about 8 years:
+
+| Check | Result |
+|---|---|
+| Vetstar S107 | "Known Planet", with 0 red flags |
+| P | 2.9626414(3) d, against the archive's 2.96264036 d; O−C rms 0.95 min |
+| TOI-404.01 epoch | Predicted to −0.5 min (0.9σ) at E = 255 |
+| Contamination | On target. A G = 8.5 star 6.6 px away is ruled out by the on-target centroid. |
+
 Unit tests (`pytest -m "not network"`) use synthetic eclipsing-binary light curves.
 
 ## Install

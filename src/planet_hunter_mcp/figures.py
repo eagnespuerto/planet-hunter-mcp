@@ -32,7 +32,7 @@ def rnaas_figure(out_stem: Path, stack: dict, params: list[float], P: float, sec
     ax[0].set_ylabel("Normalized flux")
     ax[0].legend(fontsize=6.5, loc="lower left", frameon=False)
     ax[0].text(0.97, 0.05, f"P = {P:.5f} d", transform=ax[0].transAxes, ha="right", fontsize=8)
-    ax[0].text(0.03, 0.6, "(a)", transform=ax[0].transAxes, va="center")
+    ax[0].set_title("(a)", loc="left", fontsize=9)
     if sec_curve:
         g, d, e = (np.asarray(sec_curve[k], float) for k in ("grid", "depth", "err"))
         ax[1].fill_between(g, -3 * e * 1e6, 3 * e * 1e6, color="0.85", lw=0, label=r"$\pm3\sigma$")
@@ -55,7 +55,7 @@ def rnaas_figure(out_stem: Path, stack: dict, params: list[float], P: float, sec
         ax[1].set_xlim(0, 1)
         ax[1].set_xlabel("Orbital phase")
         ax[1].set_ylabel("Depth at trial phase (ppm)")
-        ax[1].text(0.03, 0.95, "(b)", transform=ax[1].transAxes, va="top")
+        ax[1].set_title("(b)", loc="left", fontsize=9)
         ax[1].legend(fontsize=6.5, loc="lower right", frameon=False)
     fig.tight_layout()
     out = [str(out_stem.with_suffix(".pdf")), str(out_stem.with_suffix(".png"))]

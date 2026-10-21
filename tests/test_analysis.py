@@ -100,3 +100,49 @@ def test_contamination_formula():
     assert nb["flux_ratio"] == pytest.approx(0.155, abs=0.01)
     assert nb["required_neighbour_dip"] == pytest.approx(0.77, abs=0.03)
     assert nb["status"] == "implausible"
+
+
+def test_trial_period_long_baseline_no_subharmonic():
+    # WASP-98-like: P≈2.96 d, transits in 4 sectors spread over ~8 yr (~970 cycles), 30 s timing noise.
+    # Checking separations against the unrefined closest-pair period used to return P/14.
+    rng = np.random.default_rng(7)
+    P, T0 = 2.96264, 1413.188
+    epochs = np.concatenate([np.arange(0, 8), np.arange(240, 248), np.arange(880, 888), np.arange(962, 970)])
+    t = T0 + P * epochs + rng.normal(0, 30 / 86400, len(epochs))
+    events = [dict(t0=x, e_t0=30 / 86400, fully_covered=True) for x in t]
+    eph = A.fit_ephemeris(events)
+    assert eph["P"] == pytest.approx(P, abs=1e-5)
+    assert np.sqrt(np.mean(np.square(eph["oc_min"]))) < 2
+
+
+def test_alias_tests_flag_subharmonic(rng):
+    segs = make_segments(rng)
+    t, f = np.concatenate([s.t for s in segs]), np.concatenate([s.f for s in segs])
+    good = A.alias_tests(t, f, T0_TRUE, P_TRUE)
+    assert good["P_consistent"]
+    bad = A.alias_tests(t, f, T0_TRUE, P_TRUE / 7)
+    assert not bad["P_consistent"] and "sub-harmonic" in bad["warning"]
+
+
+def test_contamination_centroid_clears_distant_bright_star():
+    # WASP-98-like: a G=8.5 star 137" (6.5 px) away needs only a ~2.6 % dip, so flux alone can't clear it.
+    nb = [dict(name="bright", mag=8.53, sep_arcsec=137.6), dict(name="close", mag=13.1, sep_arcsec=20)]
+    r0 = A.contamination(0.026, 12.86, nb)
+    assert r0["n_possible"] == 2
+    r1 = A.contamination(0.026, 12.86, nb, centroid_sigma=0.5)
+    st = {n["name"]: n["status"] for n in r1["neighbours"]}
+    assert st["bright"] == "excluded_by_centroid" and st["close"] == "possible"
+    r2 = A.contamination(0.026, 12.86, nb[:1], centroid_sigma=4.0)
+    assert r2["neighbours"][0]["status"] == "possible"
+
+
+def test_secondary_masks_primary_on_short_period():
+    # Short period: without masking, 2.5–6 h baselines next to the primary produce huge false excursions.
+    rng = np.random.default_rng(3)
+    P, T0, T14_h = 2.96, 1000.0, 1.9
+    t = np.arange(1000, 1060, 2 / 1440)
+    ph = ((t - T0) / P + 0.5) % 1 - 0.5
+    f = A.trapezoid(ph * P, 0, 0.026, T14_h / 24, 0.9 / 24) + rng.normal(0, 1e-3, len(t))
+    res = A.secondary_search(t, f, T0, P, step=0.002, primary_T14_h=T14_h)
+    assert res["n_points_above_5sigma"] == 0
+    assert abs(res["max_depth"]) < 5 * res["max_err"]
