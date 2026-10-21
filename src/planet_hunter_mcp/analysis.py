@@ -429,11 +429,17 @@ def _trap_hours(x, d, T14, T23, x0):
 
 
 def stack_primary(segments: list[Segment], T0: float, P: float, inner_h: float | None = None,
-                  outer_h: float | None = None, fit_group: str = "2min") -> dict:
+                  outer_h: float | None = None, fit_group: str = "2min", model: str = "trapezoid",
+                  ld: dict | None = None) -> dict:
     """Locally normalise every covered primary, stack in hours from mid-eclipse, fit a trapezoid.
 
-    Groups: '2min' (exptime ≤ 200 s) and 'ffi'. The fit uses `fit_group` if it has data, else all."""
+    Groups: '2min' (exptime ≤ 200 s) and 'ffi'. The fit uses `fit_group` if it has data, else all.
+    model='batman' then fits a quadratic limb-darkened Mandel–Agol transit (`fit_transit`), seeded by the
+    trapezoid, with `ld` = {u1, u2, sigma, source} as the limb-darkening prior."""
+    if model not in ("trapezoid", "batman"):
+        raise ValueError("model must be 'trapezoid' or 'batman'")
     groups: dict[str, list[list]] = {"2min": [[], []], "ffi": [[], []]}
+    exps: dict[str, list] = {"2min": [], "ffi": []}
     used = []
     for s in segments:
         k = np.arange(np.floor((s.t.min() - T0) / P), np.ceil((s.t.max() - T0) / P) + 1)
@@ -447,6 +453,7 @@ def stack_primary(segments: list[Segment], T0: float, P: float, inner_h: float |
             g = "2min" if 0 < s.exptime <= 200 else "ffi"
             groups[g][0].append((tt - tc) * 24)
             groups[g][1].append(ff)
+            exps[g].append(np.full(len(tt), float(s.exptime)))
             used.append(dict(sector=s.sector, author=s.author, t_mid=float(tc), epoch=int(round((tc - T0) / P))))
     arr = {g: (np.concatenate(v[0]), np.concatenate(v[1])) if v[0] else (np.array([]), np.array([]))
            for g, v in groups.items()}
@@ -465,6 +472,165 @@ def stack_primary(segments: list[Segment], T0: float, P: float, inner_h: float |
     T14_0 = 2.6 * half.max() if len(half) else 4.0
     p, cov = curve_fit(_trap_hours, fx, ff, p0=[d0, T14_0, T14_0 / 3, 0], maxfev=40000)
     err = np.sqrt(np.abs(np.diag(cov)))
+    if model == "batman":
+        g_used = [fit_group] if len(arr[fit_group][0]) > 50 else list(arr)
+        ex = np.concatenate([np.concatenate(exps[g]) for g in g_used if exps[g]])
+        trap = dict(depth=p[0], e_depth=err[0], T14_h=abs(p[1]), e_T14_h=err[1], T23_h=max(p[2], 0),
+                    e_T23_h=err[2], x0_h=p[3])
+        fit = fit_transit(fx, ff, P, trap, ld or {}, exptime_s=float(np.median(ex)))
+        return dict(**{k: v for k, v in fit.items() if not k.startswith("_")}, eclipses_used=used,
+                    fit_group=fit_group, trapezoid=trap,
+                    _stack={g: dict(x=a[0], f=a[1]) for g, a in arr.items()}, _params=fit["_params"])
     return dict(depth=p[0], e_depth=err[0], T14_h=abs(p[1]), e_T14_h=err[1], T23_h=max(p[2], 0),
                 e_T23_h=err[2], x0_h=p[3], eclipses_used=used, fit_group=fit_group,
                 _stack={g: dict(x=a[0], f=a[1]) for g, a in arr.items()}, _params=p.tolist())
+
+
+# ------------------------------------------------------- S7 limb-darkened transit
+
+LD_DEFAULT_PRIOR = dict(u1=0.4, u2=0.25, sigma=0.5, source="weak default prior (no Teff/logg)")
+
+
+def claret_interp(rows: list[dict], teff: float, logg: float) -> dict:
+    """Bilinear (Teff, logg) interpolation of Claret (2017) quadratic coefficients (rows: Teff, logg, a, b).
+
+    Falls back to the nearest grid point when the rows do not contain the full surrounding cell."""
+    T = np.array([r["Teff"] for r in rows], float)
+    G = np.array([r["logg"] for r in rows], float)
+    a_, b_ = np.array([r["a"] for r in rows], float), np.array([r["b"] for r in rows], float)
+    tg, gg = np.unique(T), np.unique(G)
+    t_lo, t_hi = tg[tg <= teff].max(initial=-np.inf), tg[tg >= teff].min(initial=np.inf)
+    g_lo, g_hi = gg[gg <= logg].max(initial=-np.inf), gg[gg >= logg].min(initial=np.inf)
+
+    def at(tv, gv):
+        m = (T == tv) & (G == gv)
+        return (a_[m][0], b_[m][0]) if m.any() else None
+
+    corners = [at(tv, gv) for tv in (t_lo, t_hi) for gv in (g_lo, g_hi)]
+    if any(c is None for c in corners):
+        j = int(np.argmin(((T - teff) / 250) ** 2 + ((G - logg) / 0.5) ** 2))
+        return dict(u1=float(a_[j]), u2=float(b_[j]), method="nearest", Teff_grid=float(T[j]),
+                    logg_grid=float(G[j]))
+    wt = 0.0 if t_hi == t_lo else (teff - t_lo) / (t_hi - t_lo)
+    wg = 0.0 if g_hi == g_lo else (logg - g_lo) / (g_hi - g_lo)
+    w = [(1 - wt) * (1 - wg), (1 - wt) * wg, wt * (1 - wg), wt * wg]
+    return dict(u1=float(sum(wi * c[0] for wi, c in zip(w, corners))),
+                u2=float(sum(wi * c[1] for wi, c in zip(w, corners))), method="bilinear",
+                Teff_cell=[float(t_lo), float(t_hi)], logg_cell=[float(g_lo), float(g_hi)])
+
+
+def _batman_model(x_h, P_h: float, exptime_s: float = 0.0):
+    """Return f(theta) -> flux for theta = (x0_h, k, b, a/R★, u1, u2): circular orbit, times in hours.
+
+    Cadences longer than 200 s (FFI) are supersampled to ~2 min so the integrated shape is right."""
+    import batman
+
+    pm = batman.TransitParams()
+    pm.t0, pm.per, pm.rp, pm.a, pm.inc, pm.ecc, pm.w = 0.0, P_h, 0.1, 10.0, 89.0, 0.0, 90.0
+    pm.u, pm.limb_dark = [0.4, 0.25], "quadratic"
+    x_h = np.ascontiguousarray(x_h, float)
+    if exptime_s > 200:
+        m = batman.TransitModel(pm, x_h, supersample_factor=int(np.ceil(exptime_s / 120)),
+                                exp_time=exptime_s / 3600)
+    else:
+        m = batman.TransitModel(pm, x_h)
+
+    def f(theta):
+        x0, k, b, aR, u1, u2 = theta
+        pm.t0, pm.rp, pm.a = x0, k, aR
+        pm.inc = float(np.degrees(np.arccos(np.clip(b / aR, 0, 1))))
+        pm.u = [u1, u2]
+        return m.light_curve(pm)
+    return f
+
+
+def transit_durations_h(k: float, b: float, aR: float, P_h: float) -> tuple[float, float]:
+    """Circular-orbit T14 and T23 (Seager & Mallén-Ornelas 2003); T23 = 0 for a grazing transit."""
+    sini = np.sqrt(max(1 - (b / aR) ** 2, 1e-12))
+
+    def dur(r):
+        arg = r ** 2 - b ** 2
+        return 0.0 if arg <= 0 else float(P_h / np.pi * np.arcsin(min(np.sqrt(arg) / (aR * sini), 1.0)))
+    return dur(1 + k), dur(1 - k)
+
+
+def transit_model_hours(x_h, params: list[float]):
+    """Evaluate a stored Mandel–Agol fit: params = [x0_h, k, b, a/R★, u1, u2, P_h, exptime_s]."""
+    return _batman_model(x_h, params[6], params[7])(params[:6])
+
+
+def fit_transit(x_h, f, P: float, trap: dict, ld: dict, exptime_s: float = 120.0, n_mc: int = 2000,
+                seed: int = 0) -> dict:
+    """Quadratic limb-darkened (Mandel & Agol 2002, via batman) fit to a stack in hours from mid-transit.
+
+    Free: x0 (h), k = Rp/R★, b, a/R★, u1, u2, with Gaussian priors on u1, u2 from `ld` (sigma=0 fixes
+    them). Point errors are the robust out-of-transit scatter; the covariance is scaled by the reduced χ²
+    when > 1. Depth, T14 and T23 errors come from draws from that covariance."""
+    from scipy.optimize import least_squares
+
+    x_h, f = np.asarray(x_h, float), np.asarray(f, float)
+    P_h = P * 24
+    prior = {**LD_DEFAULT_PRIOR, **{k: v for k, v in ld.items() if v is not None}}
+    u0, su = np.array([prior["u1"], prior["u2"]], float), float(prior["sigma"])
+    fixed_ld = su <= 0
+    model = _batman_model(x_h, P_h, exptime_s)
+    oot = np.abs(x_h - trap["x0_h"]) > 0.75 * trap["T14_h"]
+    sig = 1.4826 * np.median(np.abs(f[oot] - np.median(f[oot]))) if oot.sum() > 20 else np.std(f)
+    sig = max(float(sig), 1e-6)
+    n = 4 if fixed_ld else 6
+    lo = np.array([trap["x0_h"] - 0.25 * trap["T14_h"], 1e-3, 0.0, 1.2, -1.0, -1.0])[:n]
+    hi = np.array([trap["x0_h"] + 0.25 * trap["T14_h"], 0.6, 1.5, 300.0, 2.0, 2.0])[:n]
+
+    def full(th):
+        return np.concatenate([th, u0]) if fixed_ld else np.asarray(th)
+
+    def resid(th):
+        r = (f - model(full(th))) / sig
+        return r if fixed_ld else np.concatenate([r, (th[4:] - u0) / su])
+
+    k0 = float(np.sqrt(max(trap["depth"], 1e-6)))
+    best = None
+    for b0 in (0.1, 0.4, 0.7, 0.9):  # b–a/R★ is degenerate at low SNR: start from several impact parameters
+        aR0 = P_h / (np.pi * max(trap["T14_h"], 1e-3)) * np.sqrt(max((1 + k0) ** 2 - b0 ** 2, 1e-3))
+        th0 = np.clip(np.array([trap["x0_h"], k0, b0, aR0, *u0])[:n], lo + 1e-6, hi - 1e-6)
+        r = least_squares(resid, th0, bounds=(lo, hi), x_scale="jac", method="trf")
+        if best is None or r.cost < best.cost:
+            best = r
+    th = full(best.x)
+    chi2r = float(np.sum(((f - model(th)) / sig) ** 2) / max(len(f) - n, 1))
+    jtj = best.jac.T @ best.jac
+    try:
+        cov = np.linalg.inv(jtj) * max(chi2r, 1.0)
+    except np.linalg.LinAlgError:
+        cov = np.linalg.pinv(jtj) * max(chi2r, 1.0)
+    err = np.sqrt(np.abs(np.diag(cov)))
+    draws = np.random.default_rng(seed).multivariate_normal(best.x, cov, size=n_mc, check_valid="ignore")
+    draws[:, 2] = np.abs(draws[:, 2])                    # b folds at zero
+    draws = draws[(draws[:, 1] > 0) & (draws[:, 3] > 1) & (draws[:, 2] < draws[:, 3])]
+    centre = _batman_model(np.array([0.0]), P_h, 0.0)   # depth = unbinned flux deficit at mid-transit
+
+    def derived(t):
+        tt = full(t)
+        t14, t23 = transit_durations_h(tt[1], tt[2], tt[3], P_h)
+        return 1 - float(centre([0.0, *tt[1:]])[0]), t14, t23
+
+    best_d = derived(best.x)
+    mc = np.array([derived(t) for t in draws])
+    e_d = np.std(mc, axis=0) if len(mc) > 10 else np.full(3, np.nan)
+    names = ["x0_h", "k", "b", "a_over_rstar", "u1", "u2"][:n]
+    out = dict(model="batman", depth=best_d[0], e_depth=float(e_d[0]), T14_h=best_d[1], e_T14_h=float(e_d[1]),
+               T23_h=best_d[2], e_T23_h=float(e_d[2]), x0_h=float(th[0]), e_x0_h=float(err[0]),
+               rp_over_rstar=float(th[1]), e_rp_over_rstar=float(err[1]), b=float(th[2]), e_b=float(err[2]),
+               a_over_rstar=float(th[3]), e_a_over_rstar=float(err[3]),
+               inc_deg=float(np.degrees(np.arccos(min(th[2] / th[3], 1.0)))),
+               u1=float(th[4]), u2=float(th[5]),
+               e_u1=None if fixed_ld else float(err[4]), e_u2=None if fixed_ld else float(err[5]),
+               ld_prior=dict(u1=float(u0[0]), u2=float(u0[1]), sigma=su,
+                             **{k: v for k, v in prior.items() if k not in ("u1", "u2", "sigma")}),
+               chi2_reduced=chi2r, point_sigma=sig, exptime_s=float(exptime_s), n_points=int(len(f)),
+               b_at_bound=bool(th[2] < 1e-3),
+               _cov=dict(names=names, cov=cov.tolist()),
+               _params=[*map(float, th), float(P_h), float(exptime_s)])
+    if out["b_at_bound"]:
+        out["note"] = "b fitted at 0 (lower bound): quote b as an upper limit from e_b, not as b ± e_b."
+    return out

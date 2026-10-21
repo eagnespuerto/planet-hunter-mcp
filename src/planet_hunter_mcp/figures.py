@@ -5,11 +5,13 @@ from pathlib import Path
 
 import numpy as np
 
-from .analysis import _trap_hours
+from .analysis import _trap_hours, transit_model_hours, transit_durations_h
 
 
 def rnaas_figure(out_stem: Path, stack: dict, params: list[float], P: float, sec_curve: dict | None,
-                 expected_secondary: dict | None = None, ref_teff: int | None = None) -> list[str]:
+                 expected_secondary: dict | None = None, ref_teff: int | None = None,
+                 model: str = "trapezoid") -> list[str]:
+    """`params` are the stored fit parameters of `model` ('trapezoid' or 'batman')."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -24,9 +26,14 @@ def rnaas_figure(out_stem: Path, stack: dict, params: list[float], P: float, sec
         ax[0].plot(ffi["x"], ffi["f"], ".", ms=2.5, color="#E69F00", alpha=0.6, label="FFI")
     if len(two.get("x", [])):
         ax[0].plot(two["x"], two["f"], ".", ms=1, color="k", alpha=0.25, label="2-min")
-    T14 = params[1]
-    xx = np.linspace(-1.5 * T14, 1.5 * T14, 800)
-    ax[0].plot(xx, _trap_hours(xx, *params), color="#0072B2", lw=1.2, label="trapezoid")
+    if model == "batman":
+        T14 = transit_durations_h(params[1], params[2], params[3], params[6])[0]
+        xx = np.linspace(-1.5 * T14, 1.5 * T14, 800)
+        ax[0].plot(xx, transit_model_hours(xx, params), color="#0072B2", lw=1.2, label="limb-darkened transit")
+    else:
+        T14 = params[1]
+        xx = np.linspace(-1.5 * T14, 1.5 * T14, 800)
+        ax[0].plot(xx, _trap_hours(xx, *params), color="#0072B2", lw=1.2, label="trapezoid")
     ax[0].set_xlim(-1.15 * T14, 1.15 * T14)
     ax[0].set_xlabel("Hours from primary eclipse")
     ax[0].set_ylabel("Normalized flux")

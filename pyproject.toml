@@ -28,6 +28,9 @@ dependencies = [
   "lightkurve>=2.4",
   "matplotlib>=3.8",
   "pymupdf>=1.24",
+  "batman-package>=2.5.3",
+  # batman imports distutils at load time; on 3.12+ only setuptools provides it.
+  "setuptools; python_version >= '3.12'",
 ]
 
 [project.optional-dependencies]
