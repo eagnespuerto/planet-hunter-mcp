@@ -1,5 +1,14 @@
 # Planet Hunter MCP
 
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![release](https://img.shields.io/github/v/release/eagnespuerto/planet-hunter-mcp?include_prereleases&sort=semver)](https://github.com/eagnespuerto/planet-hunter-mcp/releases/latest)
+[![tests](https://github.com/eagnespuerto/planet-hunter-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/eagnespuerto/planet-hunter-mcp/actions/workflows/tests.yml)
+[![made with](https://img.shields.io/badge/made%20with-Python-3776AB?logo=python&logoColor=white)](https://github.com/eagnespuerto/planet-hunter-mcp)
+[![MCP](https://img.shields.io/badge/MCP-server-6E56CF)](https://modelcontextprotocol.io)
+[![website](https://img.shields.io/badge/website-live-brightgreen)](https://github.com/eagnespuerto/vetstar)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20me-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eagnespuerto)
+[![Linktree](https://img.shields.io/badge/Linktree-soitsagnes-43E55E?logo=linktree&logoColor=white)](https://linktr.ee/soitsagnes)
+
 An [MCP](https://modelcontextprotocol.io) server for TESS planet hunters. It connects an AI assistant to
 [Vetstar](https://github.com/eagnespuerto/vetstar), MAST, SIMBAD, VizieR, Gaia DR3, ExoFOP-TESS, the NASA
 Exoplanet Archive, NASA ADS, Crossref/DataCite, the Unified Astronomy Thesaurus and Zenodo. With those it
