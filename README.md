@@ -5,6 +5,7 @@
 [![tests](https://github.com/eagnespuerto/planet-hunter-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/eagnespuerto/planet-hunter-mcp/actions/workflows/tests.yml)
 [![made with](https://img.shields.io/badge/made%20with-Python-3776AB?logo=python&logoColor=white)](https://github.com/eagnespuerto/planet-hunter-mcp)
 [![MCP](https://img.shields.io/badge/MCP-server-6E56CF)](https://modelcontextprotocol.io)
+[![M8ven Score](https://m8ven.ai/badge/mcp/eagnespuerto/planet-hunter-mcp)](https://m8ven.ai/mcp/eagnespuerto/planet-hunter-mcp?s=readme)
 [![website](https://img.shields.io/badge/website-live-brightgreen)](https://github.com/eagnespuerto/vetstar)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20me-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eagnespuerto)
 [![Linktree](https://img.shields.io/badge/Linktree-soitsagnes-43E55E?logo=linktree&logoColor=white)](https://linktr.ee/soitsagnes)
