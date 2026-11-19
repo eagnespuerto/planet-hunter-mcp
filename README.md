@@ -25,6 +25,8 @@ submit, publish or push tools; you click those buttons yourself.
 | Stage | Tools | What they do |
 |---|---|---|
 | S1 Triage | `ph_vetstar_vet`, `ph_vetstar_parse_report`, `ph_vetstar_status`, `ph_quicklook_physics` | Run Vetstar on MAST data, or parse a Vetstar PDF with pymupdf. Red-flag checks catch BLS artefact periods, blind or zero-depth odd/even tests, placeholder depths, SPOC DV misfits, LS harmonics, R₂ > 2 R_Jup and centroid offsets. Also gives R₂ and a Planck-based T₂. |
+| S1b NEMESIS (option) | `ph_nemesis_status`, `ph_nemesis_sectors`, `ph_nemesis_run`, `ph_nemesis_job` | Runs [NEMESIS](https://github.com/daxfeliz/NEMESIS) (Feliz et al. 2021; NEMESIS II, 2026) on the Vetstar v2 worker hosted as a Hugging Face Space: TESScut FFI photometry, BLS then TLS, and LEO-Vetter. Jobs queue on the Space; `ph_nemesis_job` waits, then saves `result.json`, the figures as PNG, NEMESIS's report pages, the raw FITS and Vetstar's NEMESIS PDF. |
+| S1b OGLE microlensing (option) | `ph_ogle_search` | Vetstar's OGLE panel: cleans slow variability, then applies the OGLE-IV cuts of [Mróz et al. 2019](https://doi.org/10.3847/1538-4365/ab426b) and a PSPL fit, with TESS adaptations. Saves the report and figure. |
 | S2 Identity and contamination | `ph_resolve_target`, `ph_contamination`, `ph_simbad_region` | TIC v8.2 record. For each Gaia DR3 neighbour, the dip it would need, δ_nb = δ(1+f)/f, combined with the centroid σ. |
 | S3 Novelty and literature | `ph_vizier_sweep`, `ph_vizier_query`, `ph_simbad_references`, `ph_exofop`, `ph_exoplanet_archive_cone`, `ph_exoplanet_archive_query`, `ph_ads_search` | Sweeps every VizieR catalogue and flags variability and period tables (this is how IJspeert+2024 turned up when SIMBAD missed it). Also ExoFOP TOIs and CTOIs, known planets and TOIs, and ADS through its API. |
 | S4 Data | `ph_mast_list_lightcurves`, `ph_mast_download_lightcurves` | One light curve per sector, preferring SPOC 2-min, then TESS-SPOC FFI, then QLP. Cached locally, with warnings for artefact runs. |
@@ -33,6 +35,7 @@ submit, publish or push tools; you click those buttons yourself.
 | S9–S11 Manuscript | `ph_rnaas_scaffold`, `ph_rnaas_check`, `ph_latex_build`, `ph_rnaas_submission_folder` | AASTeX 7.0.1 skeleton with the AI disclosure, Vetstar credit and a `\dataset` entry for each MAST product. Checks RNAAS limits, compiles and renders pages, and builds a flat single-column submission folder that is tested standalone. |
 | S10 References | `ph_verify_references`, `ph_uat_search` | Checks every DOI in a `.bib`/`.tex` against Crossref or DataCite (title, volume, page) and verifies UAT keyword IDs. |
 | S12 Zenodo | `ph_zenodo_prepare_bundle`, `ph_zenodo_check_record` | Preprint PDF, source zip, code and data zip, deposit-format metadata and an upload walkthrough. After you publish, it diffs the live record against the plan. |
+| ExoFOP-TESS files | `ph_exofop_zip` | Builds ExoFOP-TESS bulk-upload ZIPs from a saved NEMESIS run (two ZIPs: figures and PDFs, then report pages and raw FITS), an OGLE run, or your own files. Follows the [bulk upload rules](https://exofop.ipac.caltech.edu/tess/ExoFOP-TESS_Bulk_File_Upload_Instructions.pdf): `xxYYYYMMDD-nnn.zip` with a same-named `.txt` descriptor, `TIC<id><C>-xx<date>.<info>.<ext>` file names, and a `YYYYMMDD_username_description_n` data tag. Counters never clash on the same UT day. You upload the ZIP yourself, without renaming it. |
 | Ledger and QA | `ph_paper_numbers`, `ph_acceptance_checklist` | Every quotable number is written to `paper_numbers.json`. The checklist reports the spec's §3 acceptance items. |
 
 Resources: `planet-hunter://spec` (the pipeline contract) and `planet-hunter://targets/{tic}/numbers`.
@@ -110,6 +113,8 @@ Streamable HTTP, for remote use: `planet-hunter-mcp --transport streamable-http 
 | `PLANET_HUNTER_WORKDIR` | `~/planet-hunter` | Per-target cache and outputs (`TIC<id>/lc`, `paper_numbers.json`, `paper/`) |
 | `VETSTAR_URL` | `https://vetstar.onrender.com` | Vetstar API. Point it at a local instance (`http://localhost:8000`) if you run your own. |
 | `VETSTAR_TIMEOUT` | `600` | Seconds. The free tier cold-starts, and MAST downloads happen server-side. |
+| `NEMESIS_URL` | `https://eap-mnl-vetstar-nemesis.hf.space` | NEMESIS worker (Hugging Face Space). |
+| `NEMESIS_WORKER_TOKEN` | unset | With it, NEMESIS calls go straight to the Space. Without it, they go through Vetstar's public `/api/nemesis` proxy, which holds the token. |
 | `ADS_API_TOKEN` | unset | Needed for `ph_ads_search`; get one from <https://ui.adsabs.harvard.edu/user/settings/token>. |
 
 ## Ground rules built into the tools

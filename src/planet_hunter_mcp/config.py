@@ -6,7 +6,12 @@ import re
 from pathlib import Path
 
 VETSTAR_URL = os.environ.get("VETSTAR_URL", "https://vetstar.onrender.com").rstrip("/")
-ADS_API_TOKEN = os.environ.get("ADS_API_TOKEN", "")
+# NEMESIS (Feliz et al. 2021, 2026) runs on the Vetstar worker hosted as a Hugging Face Space.
+# With NEMESIS_WORKER_TOKEN set, calls go straight to the Space; without it they go through
+# Vetstar's public /api/nemesis proxy, which adds the token server-side.
+NEMESIS_URL = os.environ.get("NEMESIS_URL", "https://eap-mnl-vetstar-nemesis.hf.space").rstrip("/")
+NEMESIS_WORKER_TOKEN = os.environ.get("NEMESIS_WORKER_TOKEN", "")
+ADS_API_TOKEN =os.environ.get("ADS_API_TOKEN", "")
 WORKDIR = Path(os.environ.get("PLANET_HUNTER_WORKDIR", Path.home() / "planet-hunter")).expanduser()
 
 USER_AGENT = "planet-hunter-mcp/0.1 (+https://github.com/eagnespuerto/planet-hunter-mcp)"

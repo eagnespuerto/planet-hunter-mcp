@@ -286,3 +286,24 @@ def red_flags(r: dict) -> dict:
                                                         "odd_even_blind", "placeholder_depth") for f in flags),
                 gate=dict(target_identified=bool(r.get("tic") and (r.get("ra") is not None)),
                           dip_list_extracted=bool(dips)))
+
+
+# ------------------------------------------------------------------------- OGLE microlensing (Vetstar v2)
+
+async def ogle_lightcurve(tic: int, sector: int | None) -> dict:
+    """Quality-filtered TESS light curve as Vetstar's OGLE panel uses it (time, flux, flux_err)."""
+    body = {"tic_id": tic, "sector": sector}
+    return (await _request("POST", "/api/microlensing/lightcurve_by_tic", json=body)).json()
+
+
+async def ogle_search(time: list, flux: list, flux_err: list, window_d: float = 6.0) -> dict:
+    """OGLE-IV event search (Mróz et al. 2019, ApJS 244, 29) with Vetstar's TESS adaptations.
+
+    Vetstar first removes slow stellar variability (lc_clean), then runs the OGLE cuts and a
+    PSPL fit unchanged. Returns {verdict, passed, summary, cuts, fit?, cleaning, figure (b64 PNG)}."""
+    body = {"time": time, "flux": flux, "flux_err": flux_err, "window_d": window_d}
+    return (await _request("POST", "/api/microlensing/ogle_search", json=body)).json()
+
+
+async def ogle_cuts() -> dict:
+    return (await _request("GET", "/api/microlensing/ogle_cuts")).json()
