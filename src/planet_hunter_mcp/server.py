@@ -8,7 +8,9 @@ tools prepare files and a human clicks Publish/Submit.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import re
 from importlib import resources
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -19,7 +21,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from . import analysis, catalogs, lightcurves, manuscript, references, vetstar, zenodo
+from . import analysis, catalogs, exofop, lightcurves, manuscript, nemesis, references, vetstar, zenodo
 from .config import BTJD_OFFSET, MAST_DATASET_DOIS, VETSTAR_URL, WORKDIR, normalize_tic, target_dir
 from .figures import rnaas_figure
 from .util import dumps, error_text, load_numbers, record_numbers
@@ -33,6 +35,10 @@ novelty claim) → ph_mast_download_lightcurves (S4) → ph_find_eclipses (S5) �
 ph_primary_stack (S7) → ph_secondary_search (S7) → ph_make_figure (S8) → ph_rnaas_scaffold / ph_rnaas_check /
 ph_latex_build (S9) → ph_verify_references, ph_uat_search (S10) → ph_rnaas_submission_folder (S11) →
 ph_zenodo_prepare_bundle (S12) → ph_acceptance_checklist.
+
+Options: ph_nemesis_run + ph_nemesis_job (NEMESIS on the Vetstar Hugging Face Space: FFI photometry,
+BLS/TLS, LEO-Vetter) as a second S1 search; ph_ogle_search for microlensing-like bumps. ph_exofop_zip packages
+a NEMESIS/OGLE run or any files into ExoFOP-TESS bulk-upload ZIPs (the user uploads them).
 
 Authority rules: never submit, upload, publish or push; never bypass bot detection (ADS 202 pages, CAPTCHAs);
 never state a DOI, catalogue value or 'first detection' claim not verified in this run; every number in a
@@ -163,6 +169,145 @@ async def ph_quicklook_physics(
         return dumps(analysis.companion_quicklook(depth, rstar_rsun, crowdsap, secondary_depth, teff1))
     except ValueError as e:
         return f"Error: {e}"
+
+
+# ================================================================ S1b  NEMESIS + OGLE (Vetstar v2)
+
+JobId = Annotated[str, Field(description="NEMESIS job id returned by ph_nemesis_run")]
+
+
+@mcp.tool(name="ph_nemesis_status", annotations=READ_REMOTE)
+async def ph_nemesis_status() -> str:
+    """Check the NEMESIS worker (Hugging Face Space eap-mnl/vetstar-nemesis) and its queue.
+
+    Direct mode needs NEMESIS_WORKER_TOKEN; without it calls go through Vetstar's /api/nemesis proxy.
+    Returns JSON {mode, base_url, ok/online, nemesis_version, queue_depth}."""
+    try:
+        return dumps(await nemesis.health())
+    except Exception as e:  # noqa: BLE001
+        return error_text(e, f"NEMESIS ({nemesis.mode()['base_url']})")
+
+
+@mcp.tool(name="ph_nemesis_sectors", annotations=READ_REMOTE)
+async def ph_nemesis_sectors(tic: TIC) -> str:
+    """Sectors NEMESIS can run for this star (FFI coverage from tess-point, limited to NEMESIS's sector table).
+
+    Returns JSON {tic, sectors: [{sector, cadence}], unsupported, max_supported}."""
+    try:
+        return dumps(await nemesis.sectors(normalize_tic(tic)))
+    except Exception as e:  # noqa: BLE001
+        return error_text(e, "NEMESIS")
+
+
+@mcp.tool(name="ph_nemesis_run", annotations=WRITE_REMOTE)
+async def ph_nemesis_run(
+    tic: TIC,
+    sector: Annotated[int, Field(ge=1, le=200, description="TESS sector (see ph_nemesis_sectors)")],
+    min_period_days: Annotated[float | None, Field(gt=0, description="NEMESIS minP")] = None,
+    max_period_days: Annotated[float | None, Field(gt=0, description="NEMESIS maxP")] = None,
+    n_transits: Annotated[int | None, Field(ge=1, le=10, description="Minimum transits required")] = None,
+    tls: Annotated[bool | None, Field(description="Refine with Transit Least Squares (worker default: on)")] = None,
+    sde_threshold: Annotated[float | None, Field(ge=0)] = None,
+) -> str:
+    """Queue a NEMESIS run (Feliz et al. 2021; NEMESIS II 2026): FFI photometry from TESScut, BLS then TLS
+    search, and LEO-Vetter. One job runs at a time; a typical run takes 2-10 min.
+
+    Returns JSON {job_id, position}. Poll with ph_nemesis_job."""
+    try:
+        return dumps(await nemesis.submit(normalize_tic(tic), sector, minP=min_period_days, maxP=max_period_days,
+                                          N_transits=n_transits, do_TLS_Search=tls, SDE_threshold=sde_threshold))
+    except Exception as e:  # noqa: BLE001
+        return error_text(e, "NEMESIS")
+
+
+@mcp.tool(name="ph_nemesis_job", annotations=WRITE_REMOTE)
+async def ph_nemesis_job(
+    tic: TIC,
+    job_id: JobId,
+    wait_seconds: Annotated[int, Field(ge=0, le=600, description="Keep polling up to this long before returning")] = 0,
+    download_files: Annotated[bool, Field(description="When done, download NEMESIS report pages and raw FITS")] = True,
+    vetstar_pdf: Annotated[bool, Field(description="When done, also fetch Vetstar's NEMESIS PDF report")] = True,
+    author: Annotated[str | None, Field(max_length=80, description="'Prepared by' on the Vetstar PDF cover")] = None,
+    initials: Annotated[str | None, Field(max_length=8)] = None,
+) -> str:
+    """Status of a NEMESIS job. When it is done, save everything under <workdir>/TIC<id>/nemesis_<job>/:
+    result.json (full), figures as PNG, NEMESIS's own report files, raw FITS and Vetstar's PDF.
+
+    Returns JSON {state, stage_label, log_tail} while running, or {state: done, summary, saved} when done."""
+    t = normalize_tic(tic)
+    try:
+        st = await nemesis.status(job_id)
+        waited = 0
+        while st.get("state") in ("queued", "running") and waited < wait_seconds:
+            step = min(15, wait_seconds - waited)
+            await anyio.sleep(step)
+            waited += step
+            st = await nemesis.status(job_id)
+        if st.get("state") != "done":
+            return dumps(st)
+        res = await nemesis.result(job_id)
+        d = nemesis.job_dir(t, job_id)
+        (d / "result.json").write_text(dumps(res), encoding="utf-8")
+        saved: dict[str, Any] = {"dir": str(d), "result": str(d / "result.json"),
+                                 "figures": nemesis.save_figures(res, d)}
+        if download_files:
+            raw = d / "files"
+            raw.mkdir(exist_ok=True)
+            saved["files"] = [str(await nemesis.download_file(job_id, f["name"], raw / f["name"]))
+                              for f in await nemesis.files(job_id)]
+        if vetstar_pdf:
+            sec = (res.get("meta") or {}).get("sector") or 0
+            try:
+                saved["vetstar_pdf"] = str(await nemesis.vetstar_report_pdf(
+                    job_id, d / f"vetstar_nemesis_TIC{t}_S{int(sec):03d}.pdf", author, initials))
+            except Exception as e:  # noqa: BLE001 - the run is still usable without the PDF
+                saved["vetstar_pdf_error"] = error_text(e, "Vetstar NEMESIS report")
+        summ = nemesis.summary(res)
+        record_numbers(t, "nemesis", {"job_id": job_id, "method": summ["primary_method"],
+                                      "leo_disposition": summ["leo_disposition"],
+                                      **{k: v for k, v in (summ["params"] or {}).items()
+                                         if isinstance(v, (int, float, str))}})
+        return dumps({"state": "done", "summary": summ, "saved": saved})
+    except Exception as e:  # noqa: BLE001
+        return error_text(e, "NEMESIS")
+
+
+@mcp.tool(name="ph_ogle_search", annotations=WRITE_REMOTE)
+async def ph_ogle_search(
+    tic: TIC,
+    sector: Annotated[int | None, Field(description="TESS sector; omit to use the latest sector with a light curve")] = None,
+    window_d: Annotated[float, Field(ge=0.5, le=30, description="Event window half-width guess, days")] = 6.0,
+) -> str:
+    """Search a TESS light curve for a microlensing event with Vetstar's OGLE panel: slow variability is
+    cleaned first, then the OGLE-IV cuts of Mroz et al. 2019 (ApJS 244, 29; doi 10.3847/1538-4365/ab426b)
+    and a PSPL fit run unchanged, with TESS adaptations (model-sized window, chi2_out vs the PSPL
+    baseline, n_DIA not applicable).
+
+    Saves <workdir>/TIC<id>/ogle_S<sector>/ogle_report.json and ogle_search.png.
+    Returns JSON {verdict, passed, summary, cuts, fit, saved}."""
+    t = normalize_tic(tic)
+    try:
+        lc = await vetstar.ogle_lightcurve(t, sector)
+        rep = await vetstar.ogle_search(lc["time"], lc["flux"], lc["flux_err"], window_d=window_d)
+        d = target_dir(t) / f"ogle_S{int(lc['sector']):03d}"
+        d.mkdir(exist_ok=True)
+        saved = {"dir": str(d)}
+        fig = rep.pop("figure", None)
+        if fig:
+            p = d / "ogle_search.png"
+            p.write_bytes(base64.b64decode(fig.split(",", 1)[-1]))
+            saved["figure"] = str(p)
+        rep["lightcurve"] = {k: lc.get(k) for k in ("tic_id", "sector", "provider", "filename", "n_cadences")}
+        (d / "ogle_report.json").write_text(dumps(rep), encoding="utf-8")
+        saved["report"] = str(d / "ogle_report.json")
+        record_numbers(t, f"ogle_S{int(lc['sector'])}", {"verdict": rep.get("verdict"), "passed": rep.get("passed"),
+                                                        **{k: v for k, v in (rep.get("fit") or {}).items()
+                                                           if isinstance(v, (int, float, str))}})
+        out = {k: rep.get(k) for k in ("verdict", "passed", "summary", "cuts", "fit", "lightcurve")}
+        out["saved"] = saved
+        return dumps(out)
+    except Exception as e:  # noqa: BLE001
+        return error_text(e, "Vetstar OGLE search")
 
 
 # ================================================================ S2  identity + contamination
@@ -762,6 +907,106 @@ async def ph_acceptance_checklist(
         items["ai_disclosure_and_tool_credit"] = (
             "pass" if chk["checks"]["ai_disclosure_present"] and chk["checks"]["originating_tool_credited"] else "fail", None)
     return dumps({k: {"status": s, "evidence": ev} for k, (s, ev) in items.items()})
+
+
+# ================================================================ ExoFOP-TESS bulk-upload ZIPs
+
+def _nemesis_zip_files(d: Path, method: str) -> tuple[list[dict], list[dict]]:
+    """Split a saved NEMESIS run into Vetstar's two ZIPs: (summary figures + PDFs, pages + raw FITS)."""
+    m = method.lower()
+    fig = {
+        "light_curve": ("nemesis-lc", "NEMESIS detrended light curve", "L"),
+        "fold": (f"nemesis-{m}-fold", f"NEMESIS {method} phase-folded transit with residuals", "L"),
+        "odd_even": ("nemesis-odd-even", "NEMESIS odd and even transits", "L"),
+        "periodogram": (f"nemesis-{m}-periodogram", f"NEMESIS {method} periodogram", "O"),
+    }
+    main: list[dict] = []
+    for k, (key, label, code) in fig.items():
+        p = d / f"nemesis_{k}.png"
+        if p.exists():
+            main.append(dict(path=str(p), key=key, label=label, code=code))
+    for p in sorted(d.glob("vetstar_nemesis_*.pdf")):
+        main.append(dict(path=str(p), key="nemesis-vetting-report", code="O",
+                         label="NEMESIS vetting report (verdict, LEO-Vetter tests, figures)"))
+    raw: list[dict] = []
+    for p in sorted((d / "files").glob("*")):
+        if p.name.endswith("multi_page.pdf") and f"_{method}_" in p.name:
+            main.append(dict(path=str(p), key=f"nemesis-{m}-report", code="O",
+                             label=f"NEMESIS {method} multi-page vetting report"))
+            continue
+        stem = re.sub(r"^TIC_?\d+_?", "", p.stem)
+        if p.suffix.lower() == ".fits":
+            label = ("Raw TESScut full-frame-image cutout (FITS)" if "astrocut" in p.name.lower()
+                     else "Raw SPOC target pixel file (FITS)" if p.name.lower().endswith("_tp.fits")
+                     else "Raw FITS")
+            raw.append(dict(path=str(p), key=stem, code="I", label=f"{label} {p.name}"))
+        else:
+            raw.append(dict(path=str(p), key=stem, code="O", label=f"NEMESIS report page {p.name}"))
+    return main, raw
+
+
+@mcp.tool(name="ph_exofop_zip", annotations=WRITE_LOCAL)
+async def ph_exofop_zip(
+    tic: TIC,
+    initials: Annotated[str, Field(description="Your ExoFOP initials (2-8 letters), start of archive and file names")],
+    exofop_username: Annotated[str | None, Field(description="Your ExoFOP LOGIN (not initials), for a new data tag")] = None,
+    source: Annotated[Literal["nemesis", "ogle", "files"], Field(
+        description="nemesis: a saved ph_nemesis_job run (two ZIPs: figures+PDFs, pages+raw FITS); "
+                    "ogle: a saved ph_ogle_search figure; files: your own list")] = "nemesis",
+    job_id: Annotated[str | None, Field(description="NEMESIS job id (source=nemesis); default: newest saved run")] = None,
+    sector: Annotated[int | None, Field(description="Sector, for descriptions and to pick the OGLE run")] = None,
+    files: Annotated[list[dict] | None, Field(
+        description="source=files: [{path, label, code?: F|I|L|P|S|O, key?}]")] = None,
+    tag: Annotated[str | None, Field(description="Existing data tag (short-hand number or full tag); "
+                                                 "else one is built from exofop_username")] = None,
+    tag_description: Annotated[str | None, Field(description="Description part of a new tag; "
+                                                             "default Vetstar-NEMESIS / Vetstar-OGLE-GUI")] = None,
+    author: Annotated[str | None, Field(max_length=80, description="Your name, credited in each description")] = None,
+) -> str:
+    """Build ExoFOP-TESS bulk-upload ZIP(s) following the Bulk File Upload Instructions: xxYYYYMMDD-nnn.zip with
+    a same-named .txt descriptor, flat, files named TIC<id><C>-xx<date>.<info>.<ext>. Counters are picked so
+    two ZIPs on the same UT day never clash. Files only: you upload them on ExoFOP yourself.
+
+    Saves to <workdir>/TIC<id>/exofop/. Returns JSON {tag, zips: [{zip, entries, descriptor, ...}]}."""
+    t = normalize_tic(tic)
+    try:
+        out_dir = target_dir(t) / "exofop"
+        default_desc = {"nemesis": "Vetstar-NEMESIS", "ogle": "Vetstar-OGLE-GUI"}.get(source, "Vetstar")
+        if not tag:
+            if not exofop_username:
+                return ("Error: give either `tag` (an existing ExoFOP data tag) or `exofop_username` (your ExoFOP "
+                        "login, not your initials) so a new tag YYYYMMDD_username_description_1 can be built.")
+            tag = exofop.make_data_tag(exofop_username, tag_description or default_desc, 1)
+        groups: list[list[dict]] = []
+        if source == "nemesis":
+            runs = sorted(target_dir(t).glob(f"nemesis_{job_id[:12]}" if job_id else "nemesis_*"),
+                          key=lambda p: p.stat().st_mtime)
+            if not runs or not (runs[-1] / "result.json").exists():
+                return f"Error: no saved NEMESIS run for TIC {t}; run ph_nemesis_job until it is done first."
+            d = runs[-1]
+            res = json.loads((d / "result.json").read_text(encoding="utf-8"))
+            sector = sector or (res.get("meta") or {}).get("sector")
+            groups = list(_nemesis_zip_files(d, res.get("primary") or "TLS"))
+        elif source == "ogle":
+            runs = sorted(target_dir(t).glob(f"ogle_S{sector:03d}" if sector else "ogle_S*"),
+                          key=lambda p: p.stat().st_mtime)
+            fig = runs[-1] / "ogle_search.png" if runs else None
+            if not fig or not fig.exists():
+                return f"Error: no saved OGLE figure for TIC {t}; run ph_ogle_search first."
+            sector = sector or int(runs[-1].name.split("_S")[1])
+            groups = [[dict(path=str(fig), key="ogle-gui-search", code="L",
+                            label="OGLE GUI event search: light curve, PSPL fit and residuals")]]
+        else:
+            if not files:
+                return "Error: source=files needs `files`: [{path, label, code?}]."
+            groups = [files]
+        zips = [exofop.build_archive(tic=t, initials=initials, tag=tag, files=g, out_dir=out_dir,
+                                     sector=sector, author=author) for g in groups if g]
+        if not zips:
+            return "Error: nothing to bundle."
+        return dumps({"tag": tag, "zips": zips})
+    except Exception as e:  # noqa: BLE001
+        return f"Error building ExoFOP ZIP: {type(e).__name__}: {e}"
 
 
 # ================================================================ resources + prompt
