@@ -929,7 +929,7 @@ def _nemesis_zip_files(d: Path, method: str) -> tuple[list[dict], list[dict]]:
         main.append(dict(path=str(p), key="nemesis-vetting-report", code="O",
                          label="NEMESIS vetting report (verdict, LEO-Vetter tests, figures)"))
     raw: list[dict] = []
-    for p in sorted((d / "files").glob("*")):
+    for p in sorted((d / "files").glob("*"), key=lambda p: p.name):
         if p.name.endswith("multi_page.pdf") and f"_{method}_" in p.name:
             main.append(dict(path=str(p), key=f"nemesis-{m}-report", code="O",
                              label=f"NEMESIS {method} multi-page vetting report"))
