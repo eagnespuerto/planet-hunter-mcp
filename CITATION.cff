@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Planet Hunter MCP"
+type: software
+authors:
+  - family-names: Puerto
+    given-names: Ella Agnes
+    orcid: "https://orcid.org/0009-0005-1624-2025"
+    affiliation: "Independent Researcher, Manila, Philippines"
+version: 0.2.0
+date-released: 2026-11-19
+license: MIT
+repository-code: "https://github.com/eagnespuerto/planet-hunter-mcp"
+keywords: [mcp, astronomy, exoplanets, tess, nemesis, microlensing, exofop]

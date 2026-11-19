@@ -116,7 +116,7 @@ def test_save_figures_and_zip_split(tmp_path):
     main, raw = _nemesis_zip_files(tmp_path, "TLS")
     assert [f["key"] for f in main] == ["nemesis-lc", "nemesis-tls-fold", "nemesis-vetting-report",
                                         "nemesis-tls-report"]
-    assert [f["code"] for f in raw] == ["O", "I", "O"]
+    assert [f["code"] for f in raw] == ["O", "O", "I"]
 
 
 def test_bad_job_id():

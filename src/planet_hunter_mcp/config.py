@@ -14,7 +14,7 @@ NEMESIS_WORKER_TOKEN = os.environ.get("NEMESIS_WORKER_TOKEN", "")
 ADS_API_TOKEN =os.environ.get("ADS_API_TOKEN", "")
 WORKDIR = Path(os.environ.get("PLANET_HUNTER_WORKDIR", Path.home() / "planet-hunter")).expanduser()
 
-USER_AGENT = "planet-hunter-mcp/0.1 (+https://github.com/eagnespuerto/planet-hunter-mcp)"
+USER_AGENT = "planet-hunter-mcp/0.2 (+https://github.com/eagnespuerto/planet-hunter-mcp)"
 HTTP_TIMEOUT = float(os.environ.get("PLANET_HUNTER_HTTP_TIMEOUT", "60"))
 VETSTAR_TIMEOUT = float(os.environ.get("VETSTAR_TIMEOUT", "600"))  # free tier cold-starts + MAST downloads
 
