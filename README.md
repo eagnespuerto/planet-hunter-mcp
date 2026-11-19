@@ -1,5 +1,6 @@
 # Planet Hunter MCP
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24372009.svg)](https://doi.org/10.5281/zenodo.24372009)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![release](https://img.shields.io/github/v/release/eagnespuerto/planet-hunter-mcp?include_prereleases&sort=semver)](https://github.com/eagnespuerto/planet-hunter-mcp/releases/latest)
 [![tests](https://github.com/eagnespuerto/planet-hunter-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/eagnespuerto/planet-hunter-mcp/actions/workflows/tests.yml)
@@ -128,6 +129,10 @@ Streamable HTTP, for remote use: `planet-hunter-mcp --transport streamable-http 
   that ledger as comments.
 - Novelty claims come after the literature sweep. VizieR's all-catalogue sweep is part of S3 because
   SIMBAD alone is not enough.
+
+## Citation
+
+Cite the concept DOI [10.5281/zenodo.24372009](https://doi.org/10.5281/zenodo.24372009) (all versions), or [10.5281/zenodo.24372010](https://doi.org/10.5281/zenodo.24372010) for v0.2.0. `CITATION.cff` has the details.
 
 ## Development
 
