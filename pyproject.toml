@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "planet-hunter-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for TESS planet hunters: Vetstar vetting, MAST light curves, exoplanet/stellar catalogues, ephemerides, and submission-ready RNAAS + Zenodo bundles."
 readme = "README.md"
 license = "MIT"

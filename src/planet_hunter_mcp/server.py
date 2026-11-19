@@ -45,7 +45,7 @@ never state a DOI, catalogue value or 'first detection' claim not verified in th
 manuscript must come from paper_numbers.json (ph_paper_numbers). Read resource planet-hunter://spec for the
 full pipeline contract."""
 
-mcp = MCPServer("planet_hunter_mcp", instructions=INSTRUCTIONS, version="0.1.0",
+mcp = MCPServer("planet_hunter_mcp", instructions=INSTRUCTIONS, version="0.2.0",
                 website_url="https://github.com/eagnespuerto/planet-hunter-mcp")
 
 READ_REMOTE = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
